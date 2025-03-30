@@ -1,0 +1,206 @@
+
+module MyLib
+
+  include RBA
+
+  MyLib.constants.member?(:Resistor) && remove_const(:Resistor)
+  MyLib.constants.member?(:MyLib) && remove_const(:MyLib)
+
+  class Resistor < PCellDeclarationHelper
+
+    include RBA
+
+    def initialize
+      super
+
+      # Parameters
+      param(:metal_layer, TypeLayer, "Metal Layer", :default => LayerInfo::new(1, 0))
+      param(:nplus_layer, TypeLayer, "N+ Layer", :default => LayerInfo::new(2, 0))
+      param(:segments, TypeInt, "Number of Segments", :default => 3)
+      param(:seg_width, TypeDouble, "Segment Width (µm)", :default => 1.0)
+      param(:seg_length, TypeDouble, "Segment Length (µm)", :default => 6.0)
+      param(:separation, TypeDouble, "Separation Between Segments (µm)", :default => 1.0)
+      param(:contact_length, TypeDouble, "Contact Length (µm)", :default => 1.5)
+    end
+
+    def display_text_impl
+      "Resistor(#{segments} segs, W=#{'%.2f' % seg_width}, L=#{'%.2f' % seg_length})"
+    end
+
+    def produce_impl
+      # Layout unit in database units
+      dbu = layout.dbu
+
+      # Convert from µm to DBU
+      w = (seg_width / dbu).round
+      l = (seg_length / dbu).round
+      sep = (separation / dbu).round
+      cl = (contact_length / dbu).round
+
+      top = false
+      curr_x = 0
+      curr_y = 0
+
+      metal_index = layout.layer(metal_layer)
+      nplus_index = layout.layer(nplus_layer)
+
+      segments.times do |i|
+        top = !top
+
+        # First contact
+        if i == 0
+          rect = Box.new(curr_x, curr_y, curr_x + w, curr_y + cl)
+          cell.shapes(metal_index).insert(rect)
+        end
+
+        # Main segment
+        rect = Box.new(curr_x, curr_y, curr_x + w, curr_y + l)
+        cell.shapes(nplus_index).insert(rect)
+
+        # Connector or final contact
+        if i != segments - 1
+          connect_y = curr_y + (top ? (l - w) : 0)
+          rect = Box.new(curr_x + w - 2, connect_y, curr_x + w - 2 + sep + 5, connect_y + w)
+          cell.shapes(nplus_index).insert(rect)
+        else
+          connect_y = curr_y + (top ? (l - cl) : 0)
+          rect = Box.new(curr_x, connect_y, curr_x + w, connect_y + cl)
+          cell.shapes(metal_index).insert(rect)
+        end
+
+        curr_x += w + sep
+      end
+    end
+
+  end
+
+  end
+
+  class Mosfet < PCellDeclarationHelper
+  
+    include RBA
+  
+    def initialize
+      super
+  
+      param(:metal_layer, TypeLayer, "Metal Layer", :default => LayerInfo::new(1, 0))
+      param(:poly_layer, TypeLayer, "Poly Layer", :default => LayerInfo::new(3, 0))
+      param(:via_layer, TypeLayer, "Via Layer", :default => LayerInfo::new(4, 0))
+      param(:nplus_layer, TypeLayer, "N+ Layer", :default => LayerInfo::new(2, 0))
+      param(:pplus_layer, TypeLayer, "P+ Layer", :default => LayerInfo::new(5, 0))
+  
+      param(:channel_length, TypeDouble, "Channel Length (µm)", :default => 1.0)
+      param(:channel_width, TypeDouble, "Channel Width (µm)", :default => 4.0)
+      param(:diff, TypeDouble, "Diffusion Buffer (µm)", :default => 2.5)
+      param(:type, TypeString, "MOS Type (NMOS/PMOS)", :default => "NMOS")
+    end
+  
+    def display_text_impl
+      "Mosfet(#{type}, L=#{channel_length}, W=#{channel_width})"
+    end
+  
+    def produce_impl
+      dbu = layout.dbu
+      cl_dbu = (channel_length / dbu).round
+      cw_dbu = (channel_width / dbu).round
+      diff_buf = (diff / dbu).round
+  
+      contact_size = (10.0 / dbu).round
+      pad_size = [(24.0 / dbu).round, (24.0 / dbu).round]
+  
+      gate_w = cl_dbu
+      gate_h = cw_dbu + (10.0 / dbu).round
+      diff_w = diff_buf * 2 + cl_dbu
+      diff_h = cw_dbu
+  
+      metal = layout.layer(metal_layer)
+      poly = layout.layer(poly_layer)
+      via = layout.layer(via_layer)
+      nplus = layout.layer(nplus_layer)
+      pplus = layout.layer(pplus_layer)
+  
+      diff_layer = (type.upcase == "PMOS") ? pplus : nplus
+  
+      # GATE block
+      gate_rect = Box.new(0, 0, gate_w, gate_h)
+      cell.shapes(poly).insert(gate_rect)
+  
+      gate_via_rect = Box.new(0, 0, contact_size * 2, contact_size * 2)
+      cell.shapes(poly).insert(gate_via_rect)
+  
+      via_metal_rect = Box.new(contact_size / 2, contact_size / 2,
+                               contact_size * 3 / 2, contact_size * 3 / 2)
+      cell.shapes(via).insert(via_metal_rect)
+  
+      gate_metal = Box.new(contact_size - pad_size[0] / 2,
+                           (contact_size * 1.75 - pad_size[1]).round,
+                           contact_size - pad_size[0] / 2 + pad_size[0],
+                           (contact_size * 1.75 - pad_size[1] + pad_size[1]).round)
+      cell.shapes(metal).insert(gate_metal)
+  
+      # Move gate as group
+      gate_offset_x = ((2 * contact_size - gate_w) / 2).round
+      gate_offset_y = 2 * contact_size
+      cell.shapes(poly).transform(RBA::Trans::new(gate_offset_x, gate_offset_y))
+      cell.shapes(via).transform(RBA::Trans::new(gate_offset_x, gate_offset_y))
+      cell.shapes(metal).transform(RBA::Trans::new(gate_offset_x, gate_offset_y))
+  
+      # DIFFUSION block
+      diff_rect = Box.new(0, 0, diff_w, diff_h)
+      cell.shapes(diff_layer).insert(diff_rect)
+  
+      via_y = (diff_h - contact_size) / 2
+      contact_y = via_y - 2
+  
+      drain_w = diff_w / 2 - gate_w / 2
+  
+      contact_1 = Box.new((drain_w - pad_size[0]) / 2,
+                          contact_y,
+                          (drain_w - pad_size[0]) / 2 + pad_size[0],
+                          contact_y + pad_size[1])
+      cell.shapes(metal).insert(contact_1)
+  
+      contact_2 = Box.new(diff_w / 2 + drain_w / 2 + gate_w / 2 - pad_size[0] / 2,
+                          contact_y,
+                          diff_w / 2 + drain_w / 2 + gate_w / 2 + pad_size[0] / 2,
+                          contact_y + pad_size[1])
+      cell.shapes(metal).insert(contact_2)
+  
+      via_1 = Box.new((drain_w - contact_size) / 2,
+                      via_y,
+                      (drain_w - contact_size) / 2 + contact_size,
+                      via_y + contact_size)
+      cell.shapes(via).insert(via_1)
+  
+      via_2 = Box.new(diff_w / 2 + drain_w / 2 + gate_w / 2 - contact_size / 2,
+                      via_y,
+                      diff_w / 2 + drain_w / 2 + gate_w / 2 + contact_size / 2,
+                      via_y + contact_size)
+      cell.shapes(via).insert(via_2)
+  
+      # Move DIFFUSION block under gate
+      diff_x = ((contact_size * 2 - diff_w) / 2).round
+      diff_y = (2 * contact_size + (gate_h - diff_h) / 2).round
+      cell.shapes(diff_layer).transform(RBA::Trans::new(diff_x, diff_y))
+      cell.shapes(metal).transform(RBA::Trans::new(diff_x, diff_y))
+      cell.shapes(via).transform(RBA::Trans::new(diff_x, diff_y))
+    end
+  
+  end
+
+  class MyLib < Library
+
+    def initialize
+      self.description = "My PCell Library with Resistor and Mosfet"
+
+      layout.register_pcell("Resistor", Resistor::new)
+      layout.register_pcell("Mosfet", Mosfet::new)
+
+      register("MyLib")
+    end
+
+  end
+
+  MyLib::new
+
+end
